@@ -5,10 +5,13 @@ Default URL: http://localhost:8000
 """
 
 import json
+import random
 import sys
 import time
 
 import urllib.request
+
+random.seed(42)
 
 BASE_URL = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8000"
 PREDICT_URL = f"{BASE_URL}/predict"
@@ -100,14 +103,19 @@ def scenario_ddos():
 
     requests = []
     for i in range(1200):
+        status = status_cycle[i % 5]
+        if status == 200:
+            rt = max(1, random.gauss(50, 20))
+        else:
+            rt = max(1, random.gauss(800, 200))
         requests.append({
             "ip": ip, "method": "GET",
-            "status_code": status_cycle[i % 5],
+            "status_code": status,
             "timestamp": base_ts + i * 0.015,
             "endpoint": endpoints[i % len(endpoints)],
-            "payload_size": 100 + (i % 3) * 2,
+            "payload_size": max(50, random.gauss(500, 115)),
             "user_agent": ua,
-            "response_time": 10 + (i % 5) * 0.3,
+            "response_time": rt,
         })
     return ip, requests
 
@@ -137,9 +145,9 @@ def scenario_malicious_bot():
             "status_code": status_cycle[i % len(status_cycle)],
             "timestamp": base_ts + i * 1.5,
             "endpoint": endpoints[i % len(endpoints)],
-            "payload_size": 200 + (i % 5) * 150,
+            "payload_size": max(10, random.gauss(2000, 520)),
             "user_agent": uas[i % len(uas)],
-            "response_time": 10 + (i % 7) * 5,
+            "response_time": max(1, random.gauss(100, 30)),
         })
     return ip, requests
 
