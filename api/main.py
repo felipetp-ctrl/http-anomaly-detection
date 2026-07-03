@@ -2,7 +2,7 @@ import time
 from contextlib import asynccontextmanager
 
 import numpy as np
-from fastapi import FastAPI
+from fastapi import Body, FastAPI
 
 from api.schemas import PredictRequest, PredictResponse
 from api.state import add_record, get_records
@@ -37,8 +37,68 @@ def health():
     return {"status": "ok"}
 
 
+PREDICT_EXAMPLES = {
+    "legitimate_user": {
+        "summary": "Cenário 1 — Usuário legítimo",
+        "description": "Navegação normal: GET espaçado, status 200, browser real",
+        "value": {
+            "ip": "203.0.113.10",
+            "method": "GET",
+            "status_code": 200,
+            "timestamp": 1751500000.0,
+            "endpoint": "/api/products",
+            "payload_size": 5000,
+            "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "response_time": 50,
+        },
+    },
+    "credential_stuffing": {
+        "summary": "Cenário 2 — Credential Stuffing",
+        "description": "400 POSTs rápidos em /login, 90% status 401, bot UA",
+        "value": {
+            "ip": "198.51.100.77",
+            "method": "POST",
+            "status_code": 401,
+            "timestamp": 1751500000.0,
+            "endpoint": "/login",
+            "payload_size": 256,
+            "user_agent": "python-requests/2.31",
+            "response_time": 45,
+        },
+    },
+    "ddos": {
+        "summary": "Cenário 3 — L7 DDoS",
+        "description": "Rajada de 1200 requests, mix 200/503/504, browser UA",
+        "value": {
+            "ip": "192.0.2.200",
+            "method": "GET",
+            "status_code": 503,
+            "timestamp": 1751500000.0,
+            "endpoint": "/api/checkout",
+            "payload_size": 500,
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "response_time": 800,
+        },
+    },
+    "malicious_bot": {
+        "summary": "Cenário 4 — Bot malicioso (scan)",
+        "description": "Scan de endpoints sensíveis: /.env, /.git/config, /admin, etc.",
+        "value": {
+            "ip": "172.16.50.99",
+            "method": "GET",
+            "status_code": 404,
+            "timestamp": 1751500000.0,
+            "endpoint": "/.env",
+            "payload_size": 2000,
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "response_time": 100,
+        },
+    },
+}
+
+
 @app.post("/predict", response_model=PredictResponse)
-def predict(req: PredictRequest):
+def predict(req: PredictRequest = Body(openapi_examples=PREDICT_EXAMPLES)):
     t0 = time.perf_counter()
 
     record = RequestRecord(
