@@ -24,6 +24,14 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="HTTP Anomaly Detection", lifespan=lifespan)
 
 
+@app.get("/")
+def root():
+    return {
+        "service": "HTTP Anomaly Detection",
+        "endpoints": ["/predict", "/health", "/docs"],
+    }
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
