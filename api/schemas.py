@@ -18,3 +18,20 @@ class PredictResponse(BaseModel):
     anomaly_score: float
     top_features: dict[str, float]
     timing_ms: dict[str, float]
+
+
+class DemoSample(BaseModel):
+    request_number: int
+    is_anomaly: bool
+    anomaly_score: float
+    top_features: dict[str, float]
+
+
+class DemoResponse(BaseModel):
+    scenario: str
+    description: str
+    ip: str
+    total_requests: int
+    anomalies_detected: int
+    first_anomaly_at: int | None
+    samples: list[DemoSample]
