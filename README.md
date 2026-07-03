@@ -68,9 +68,25 @@ Response includes anomaly score, top contributing features, and per-stage latenc
 
 ## Azure Deployment
 
+Deployed as an Azure Container App:
+
 ```bash
-az webapp up --name http-anomaly-detection --runtime "PYTHON:3.12" --sku B1
+# Build and push to ACR
+az acr login --name <acr-name>
+docker build --platform linux/amd64 -t <acr-name>.azurecr.io/http-anomaly-api:latest .
+docker push <acr-name>.azurecr.io/http-anomaly-api:latest
+
+# Create Container App
+az containerapp create \
+  --name http-anomaly-api \
+  --resource-group <rg> \
+  --environment <env> \
+  --image <acr-name>.azurecr.io/http-anomaly-api:latest \
+  --target-port 8000 \
+  --ingress external
 ```
+
+**Live**: https://http-anomaly-api.blackplant-e06bfbe9.centralus.azurecontainerapps.io
 
 ## Stack
 

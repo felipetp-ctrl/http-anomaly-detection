@@ -1,0 +1,8 @@
+.venv/
+.git/
+__pycache__/
+data/http_logs.csv
+data/features.csv
+*.pyc
+.DS_Store
+CONTEXT.md
