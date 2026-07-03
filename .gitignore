@@ -4,9 +4,8 @@ __pycache__/
 .env
 .venv/
 venv/
-artifacts/*.joblib
-artifacts/*.json
 data/http_logs.csv
+data/features.csv
 *.egg-info/
 dist/
 build/

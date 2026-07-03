@@ -1,0 +1,18 @@
+{
+  "feature_names": [
+    "request_count_30s",
+    "request_count_5min",
+    "endpoint_entropy",
+    "status_code_entropy",
+    "status_401_ratio",
+    "interval_std",
+    "unique_ua_ratio",
+    "known_ua_ratio",
+    "payload_size_std",
+    "response_time_std"
+  ],
+  "n_estimators": 100,
+  "contamination": 0.05,
+  "trained_at": "2026-07-03T17:50:37.589957+00:00",
+  "training_samples": 533
+}
