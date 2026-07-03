@@ -13,31 +13,6 @@ import urllib.request
 BASE_URL = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8000"
 PREDICT_URL = f"{BASE_URL}/predict"
 
-LEGITIMATE_USER = {
-    "ip": "203.0.113.10",
-    "method": "GET",
-    "status_code": 200,
-    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-}
-
-CREDENTIAL_STUFFING = {
-    "ip": "198.51.100.77",
-    "method": "POST",
-    "status_code": 401,
-    "user_agent": "python-requests/2.31",
-}
-
-DDOS = {
-    "ip": "192.0.2.200",
-    "method": "GET",
-    "status_code": 200,
-    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-}
-
-ENDPOINTS_NORMAL = ["/api/products", "/api/users", "/home", "/about", "/api/search", "/js/app.js"]
-ENDPOINTS_STUFFING = ["/login", "/auth", "/login"]
-ENDPOINTS_DDOS = ["/api/checkout", "/api/checkout", "/api/checkout"]
-
 
 def send(payload: dict) -> dict:
     data = json.dumps(payload).encode()
@@ -46,7 +21,7 @@ def send(payload: dict) -> dict:
         return json.loads(resp.read())
 
 
-def print_result(label: str, result: dict):
+def print_result(result: dict):
     score = result["anomaly_score"]
     is_anom = result["is_anomaly"]
     bar_len = int(abs(score) * 30)
@@ -58,30 +33,115 @@ def print_result(label: str, result: dict):
 
     features = result["top_features"]
     top3 = list(features.items())[:3]
-    feat_str = ", ".join(f"{k}={v}" for k, v in top3)
+    feat_str = ", ".join(f"{k}={v:.1f}" if isinstance(v, float) else f"{k}={v}" for k, v in top3)
 
     print(f"  {tag}  score={score:+.4f}  [{bar}]  {feat_str}")
 
 
-def scenario(title: str, profile: dict, endpoints: list, count: int, payload_range: tuple, rt_range: tuple):
+def run_scenario(title: str, ip: str, requests: list[dict], show_every: int = 1):
     print(f"\n{'='*70}")
     print(f"  {title}")
-    print(f"  IP: {profile['ip']}  |  UA: {profile['user_agent'][:50]}...")
+    print(f"  IP: {ip}  |  {len(requests)} requests")
     print(f"{'='*70}")
 
-    base_ts = time.time()
-    for i in range(count):
-        payload = {
-            **profile,
-            "timestamp": base_ts + i * 0.3,
+    for i, req in enumerate(requests):
+        result = send(req)
+        if (i % show_every) == 0 or i == len(requests) - 1:
+            print(f"  req #{i+1:4d}/{len(requests)}", end="")
+            print_result(result)
+
+
+def scenario_legitimate():
+    ip = "203.0.113.10"
+    base_ts = 1751500000.0
+    endpoints = ["/api/products", "/api/users", "/home", "/about", "/api/search",
+                 "/js/app.js", "/css/style.css", "/images/logo.png"]
+    ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+
+    requests = []
+    for i in range(10):
+        requests.append({
+            "ip": ip, "method": "GET", "status_code": 200,
+            "timestamp": base_ts + i * 35.0,
             "endpoint": endpoints[i % len(endpoints)],
-            "payload_size": payload_range[0] + (i % 3) * (payload_range[1] - payload_range[0]) // 3,
-            "response_time": rt_range[0] + (i % 5) * (rt_range[1] - rt_range[0]) / 5,
-        }
-        result = send(payload)
-        print(f"  req #{i+1:2d}/{count}", end="")
-        print_result("", result)
-        time.sleep(0.15)
+            "payload_size": 5000 + i * 3000,
+            "user_agent": ua,
+            "response_time": 50 + i * 40,
+        })
+    return ip, requests
+
+
+def scenario_credential_stuffing():
+    ip = "198.51.100.77"
+    base_ts = 1751500000.0
+    ua = "python-requests/2.31"
+
+    requests = []
+    for i in range(400):
+        status = 401 if i % 10 != 9 else 200
+        requests.append({
+            "ip": ip, "method": "POST",
+            "status_code": status,
+            "timestamp": base_ts + i * 0.05,
+            "endpoint": "/login",
+            "payload_size": 256 + (i % 3),
+            "user_agent": ua,
+            "response_time": 45 + (i % 5) * 0.5,
+        })
+    return ip, requests
+
+
+def scenario_ddos():
+    ip = "192.0.2.200"
+    base_ts = 1751500000.0
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+    endpoints = ["/api/checkout", "/api/search"]
+    status_cycle = [200, 200, 200, 503, 504]
+
+    requests = []
+    for i in range(1200):
+        requests.append({
+            "ip": ip, "method": "GET",
+            "status_code": status_cycle[i % 5],
+            "timestamp": base_ts + i * 0.015,
+            "endpoint": endpoints[i % len(endpoints)],
+            "payload_size": 100 + (i % 3) * 2,
+            "user_agent": ua,
+            "response_time": 10 + (i % 5) * 0.3,
+        })
+    return ip, requests
+
+
+def scenario_malicious_bot():
+    ip = "172.16.50.99"
+    base_ts = 1751500000.0
+    endpoints = ["/.env", "/.git/config", "/admin", "/wp-login.php", "/phpmyadmin",
+                 "/api/users", "/.aws/credentials", "/server-status", "/actuator",
+                 "/graphql", "/debug", "/console", "/.svn/entries", "/backup.sql",
+                 "/wp-admin", "/config.php", "/.htaccess", "/xmlrpc.php",
+                 "/api/v1/debug", "/metrics", "/health", "/trace", "/dump"]
+    uas = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+        "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    ]
+    status_cycle = [200, 404, 404, 403, 200, 404]
+
+    requests = []
+    for i in range(200):
+        requests.append({
+            "ip": ip, "method": "GET",
+            "status_code": status_cycle[i % len(status_cycle)],
+            "timestamp": base_ts + i * 1.5,
+            "endpoint": endpoints[i % len(endpoints)],
+            "payload_size": 200 + (i % 5) * 150,
+            "user_agent": uas[i % len(uas)],
+            "response_time": 10 + (i % 7) * 5,
+        })
+    return ip, requests
 
 
 def main():
@@ -90,35 +150,17 @@ def main():
     print(f"  API: {BASE_URL}")
     print("="*70)
 
-    input("\n  [Enter] Cenário 1: Tráfego legítimo")
-    scenario(
-        "CENÁRIO 1 — Usuário legítimo navegando normalmente",
-        LEGITIMATE_USER,
-        ENDPOINTS_NORMAL,
-        count=8,
-        payload_range=(5000, 30000),
-        rt_range=(50, 400),
-    )
+    input("\n  [Enter] Cenário 1: Tráfego legítimo (10 requests espaçados)")
+    ip, reqs = scenario_legitimate()
+    run_scenario("CENÁRIO 1 — Usuário legítimo navegando normalmente", ip, reqs)
 
-    input("\n  [Enter] Cenário 2: Credential stuffing")
-    scenario(
-        "CENÁRIO 2 — Credential stuffing em /login",
-        CREDENTIAL_STUFFING,
-        ENDPOINTS_STUFFING,
-        count=15,
-        payload_range=(200, 300),
-        rt_range=(40, 60),
-    )
+    input("\n  [Enter] Cenário 2: Credential stuffing (400 POSTs em /login)")
+    ip, reqs = scenario_credential_stuffing()
+    run_scenario("CENÁRIO 2 — Credential stuffing: 400 POSTs, 90% status 401, bot UA", ip, reqs, show_every=50)
 
-    input("\n  [Enter] Cenário 3: L7 DDoS")
-    scenario(
-        "CENÁRIO 3 — L7 DDoS em endpoints pesados",
-        DDOS,
-        ENDPOINTS_DDOS,
-        count=40,
-        payload_range=(100, 150),
-        rt_range=(10, 15),
-    )
+    input("\n  [Enter] Cenário 3: L7 DDoS (1200 requests em rajada)")
+    ip, reqs = scenario_ddos()
+    run_scenario("CENÁRIO 3 — L7 DDoS: 1200 requests, browser UA, mix 200/503/504", ip, reqs, show_every=100)
 
     print(f"\n{'='*70}")
     print("  DEMO COMPLETA")
