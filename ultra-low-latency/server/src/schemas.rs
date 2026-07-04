@@ -21,3 +21,29 @@ pub struct PredictResponse {
     pub top_features: HashMap<String, f64>,
     pub timing_ms: HashMap<String, f64>,
 }
+
+#[derive(Serialize)]
+pub struct DemoSample {
+    pub request_number: usize,
+    pub is_anomaly: bool,
+    pub anomaly_score: f64,
+    pub top_features: HashMap<String, f64>,
+}
+
+#[derive(Serialize)]
+pub struct DemoResponse {
+    pub scenario: String,
+    pub description: String,
+    pub ip: String,
+    pub total_requests: usize,
+    pub anomalies_detected: usize,
+    pub first_anomaly_at: Option<usize>,
+    pub samples: Vec<DemoSample>,
+}
+
+#[derive(Serialize)]
+pub struct DemoScenarioSummary {
+    pub name: String,
+    pub title: String,
+    pub description: String,
+}

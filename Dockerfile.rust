@@ -1,0 +1,27 @@
+FROM rust:1.96-slim AS builder
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+
+COPY ultra-low-latency/server/ .
+
+RUN cargo build --release
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --create-home appuser
+
+COPY --from=builder /app/target/release/http-anomaly-server /usr/local/bin/
+COPY --from=builder /app/assets/ /app/assets/
+
+USER appuser
+WORKDIR /app
+
+EXPOSE 8080
+
+ENV ASSETS_DIR=/app/assets
+
+CMD ["http-anomaly-server"]

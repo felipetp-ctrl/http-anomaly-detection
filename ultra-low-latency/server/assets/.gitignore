@@ -1,3 +1,2 @@
 *.onnx
-*.json
 !.gitkeep

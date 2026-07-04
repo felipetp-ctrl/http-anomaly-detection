@@ -16,7 +16,32 @@ cargo build --release
 # 3. Run
 cargo run --release
 # Server starts on 0.0.0.0:8080
+
+# 4. Run local smoke test / demo client
+python ultra-low-latency/demo_local.py --base-url http://127.0.0.1:8080 --predict
 ```
+
+## Local Demo Test
+
+The Python helper in `ultra-low-latency/demo_local.py` checks the ultra-low-latency service end-to-end:
+
+- `/health`
+- `/openapi.json`
+- `/docs`
+- `/demo`
+- `/demo/{scenario}`
+- optional `/predict` smoke call
+
+If `http://127.0.0.1:8080` is not already running the Rust server, the helper can start it automatically on a free local port and continue the test flow.
+If `/demo` is not exposed by the running service yet, the helper falls back to a local demo generator and still exercises `/predict` across the same scenarios.
+
+Example:
+
+```bash
+python ultra-low-latency/demo_local.py --base-url http://127.0.0.1:8080 --scenario all --predict
+```
+
+Use `--no-auto-start` if you want the helper to fail instead of launching the Rust server itself.
 
 ## Latency Comparison (localhost, 100 requests)
 
@@ -51,3 +76,10 @@ HTTP Request → Actix-Web → serde JSON → State (HashMap) → Features (Rust
 ## API
 
 Same contract as the Python server — drop-in replacement on port 8080.
+
+## Visual Docs
+
+- Swagger UI: `/docs`
+- OpenAPI spec: `/openapi.json`
+
+The docs page uses the generated OpenAPI schema from the Rust service and exposes the existing `/predict`, `/health`, and demo endpoints in an interactive interface.

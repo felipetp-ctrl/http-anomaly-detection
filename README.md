@@ -110,6 +110,16 @@ az containerapp create \
 
 The Rust server reimplements the full inference pipeline — feature engineering, StandardScaler, and Isolation Forest tree traversal — in native Rust, achieving **360x lower server-side latency**. See [`ultra-low-latency/`](ultra-low-latency/) for build instructions.
 
+## Ultra-Low Latency Demo
+
+The Rust variant ships with interactive docs and a local smoke-test helper:
+
+- Swagger UI: `ultra-low-latency/server` exposes `/docs`
+- OpenAPI spec: `ultra-low-latency/server` exposes `/openapi.json`
+- Local demo helper: `python ultra-low-latency/demo_local.py --scenario all --predict`
+
+If the running local server does not expose the full demo routes yet, the helper falls back to the local scenario generator and still exercises `/predict` end-to-end.
+
 ## Stack
 
 Python 3.12+ · FastAPI · scikit-learn (Isolation Forest) · joblib · pandas (training only)
