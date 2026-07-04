@@ -88,6 +88,15 @@ az containerapp create \
 
 **Live**: https://http-anomaly-api.blackplant-e06bfbe9.centralus.azurecontainerapps.io
 
+## Latency (localhost, 100 requests)
+
+| Metric | Value |
+|--------|-------|
+| Mean | 10.5 ms |
+| p50 | 10.8 ms |
+| p95 | 11.5 ms |
+| p99 | 12.3 ms |
+
 ## Stack
 
 Python 3.12+ · FastAPI · scikit-learn (Isolation Forest) · joblib · pandas (training only)
