@@ -90,6 +90,8 @@ az containerapp create \
 
 ## Latency (localhost, 100 requests)
 
+### Python (FastAPI)
+
 | Metric | Value |
 |--------|-------|
 | Mean | 10.5 ms |
@@ -97,6 +99,19 @@ az containerapp create \
 | p95 | 11.5 ms |
 | p99 | 12.3 ms |
 
+### Rust (Actix-Web) — Ultra-Low Latency
+
+| Metric | Client (curl) | Server-side |
+|--------|--------------|-------------|
+| Mean | 0.621 ms | 0.029 ms (29 µs) |
+| p50 | 0.623 ms | 0.030 ms |
+| p95 | 0.748 ms | 0.040 ms |
+| p99 | 0.854 ms | 0.110 ms |
+
+The Rust server reimplements the full inference pipeline — feature engineering, StandardScaler, and Isolation Forest tree traversal — in native Rust, achieving **360x lower server-side latency**. See [`ultra-low-latency/`](ultra-low-latency/) for build instructions.
+
 ## Stack
 
 Python 3.12+ · FastAPI · scikit-learn (Isolation Forest) · joblib · pandas (training only)
+
+Rust 1.96+ · Actix-Web · serde (ultra-low-latency variant)
