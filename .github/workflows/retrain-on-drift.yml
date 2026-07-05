@@ -1,0 +1,41 @@
+name: Retrain on Drift
+
+on:
+  repository_dispatch:
+    types: [drift-detected]
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Reason for manual retrain"
+        required: false
+        default: "Manual trigger"
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+  AZURE_ML_WORKSPACE: ${{ vars.AZURE_ML_WORKSPACE }}
+
+jobs:
+  log-trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log drift event
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_REASON: ${{ github.event.inputs.reason }}
+        run: |
+          echo "=== Retrain Triggered ==="
+          echo "Event: $EVENT_NAME"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "Reason: $DISPATCH_REASON"
+          else
+            echo "Triggered by drift detection webhook"
+          fi
+
+  retrain:
+    needs: log-trigger
+    uses: ./.github/workflows/train-deploy.yml
+    secrets: inherit

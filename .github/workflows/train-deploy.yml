@@ -1,0 +1,185 @@
+name: Train & Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "training/**"
+      - "data/**"
+      - "lib/**"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+env:
+  AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+  AZURE_ML_WORKSPACE: ${{ vars.AZURE_ML_WORKSPACE }}
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    outputs:
+      run_id: ${{ steps.metrics.outputs.run_id }}
+      silhouette_score: ${{ steps.metrics.outputs.silhouette_score }}
+      anomaly_rate: ${{ steps.metrics.outputs.anomaly_rate }}
+      model_version: ${{ steps.metrics.outputs.model_version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Azure ML CLI
+        run: az extension add --name ml --yes
+
+      - name: Submit training job
+        id: submit
+        run: |
+          JOB_NAME=$(az ml job create \
+            --file training/azureml_job.yml \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --workspace-name "$AZURE_ML_WORKSPACE" \
+            --query name -o tsv)
+          echo "job_name=$JOB_NAME" >> "$GITHUB_OUTPUT"
+
+          echo "Waiting for job $JOB_NAME..."
+          az ml job stream \
+            --name "$JOB_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --workspace-name "$AZURE_ML_WORKSPACE"
+
+          STATUS=$(az ml job show \
+            --name "$JOB_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --workspace-name "$AZURE_ML_WORKSPACE" \
+            --query status -o tsv)
+
+          if [ "$STATUS" != "Completed" ]; then
+            echo "::error::Training job failed with status: $STATUS"
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Extract metrics
+        id: metrics
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          pip install mlflow azure-ai-ml azure-identity
+          python -c "
+          from azure.ai.ml import MLClient
+          from azure.identity import DefaultAzureCredential
+          import mlflow, os
+
+          ml_client = MLClient(
+              DefaultAzureCredential(),
+              os.environ['AZURE_SUBSCRIPTION_ID'],
+              os.environ['AZURE_RESOURCE_GROUP'],
+              os.environ['AZURE_ML_WORKSPACE'],
+          )
+          tracking_uri = ml_client.workspaces.get(os.environ['AZURE_ML_WORKSPACE']).mlflow_tracking_uri
+          mlflow.set_tracking_uri(tracking_uri)
+
+          experiment = mlflow.get_experiment_by_name('http-anomaly-isolation-forest')
+          runs = mlflow.search_runs([experiment.experiment_id], order_by=['start_time DESC'], max_results=1)
+          run = runs.iloc[0]
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f'run_id={run.run_id}\n')
+              f.write(f'silhouette_score={run[\"metrics.silhouette_score\"]}\n')
+              f.write(f'anomaly_rate={run[\"metrics.anomaly_rate\"]}\n')
+              f.write(f'model_version={run.get(\"tags.mlflow.model_version\", \"unknown\")}\n')
+          "
+
+  quality-gate:
+    needs: train
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check quality metrics
+        env:
+          SILHOUETTE: ${{ needs.train.outputs.silhouette_score }}
+          ANOMALY_RATE: ${{ needs.train.outputs.anomaly_rate }}
+        run: |
+          echo "Silhouette score: $SILHOUETTE"
+          echo "Anomaly rate: $ANOMALY_RATE"
+
+          python3 -c "
+          import os
+          sil = float(os.environ['SILHOUETTE'])
+          rate = float(os.environ['ANOMALY_RATE'])
+
+          if sil < 0.1:
+              print('::error::Silhouette score too low: {}'.format(sil))
+              exit(1)
+
+          if rate < 0.03 or rate > 0.07:
+              print('::error::Anomaly rate out of range: {}'.format(rate))
+              exit(1)
+
+          print('Quality gate PASSED')
+          print(f'  Silhouette: {sil:.4f} (>= 0.1)')
+          print(f'  Anomaly rate: {rate:.4f} (0.03-0.07)')
+          "
+
+  deploy-canary:
+    needs: [train, quality-gate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy canary (10% traffic)
+        env:
+          AZURE_CONTAINER_APP_NAME: ${{ vars.AZURE_CONTAINER_APP_NAME }}
+          AZURE_CONTAINER_REGISTRY: ${{ vars.AZURE_CONTAINER_REGISTRY }}
+          IMAGE_TAG: ${{ needs.train.outputs.model_version }}
+          CANARY_PERCENT: "10"
+        run: bash infra/deploy_container_app.sh
+
+      - name: Monitor canary (10 minutes)
+        env:
+          APP_URL: ${{ vars.AZURE_CONTAINER_APP_URL }}
+        run: |
+          echo "Monitoring canary for 10 minutes..."
+          for i in $(seq 1 10); do
+            echo "Minute $i/10"
+            HEALTH=$(curl -sf "https://${APP_URL}/health" || echo "FAIL")
+            if [ "$HEALTH" = "FAIL" ]; then
+              echo "::error::Health check failed at minute $i"
+              exit 1
+            fi
+            sleep 60
+          done
+          echo "Canary monitoring passed"
+
+      - name: Promote to 100%
+        env:
+          AZURE_CONTAINER_APP_NAME: ${{ vars.AZURE_CONTAINER_APP_NAME }}
+        run: |
+          NEW_REVISION=$(az containerapp revision list \
+            --name "$AZURE_CONTAINER_APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query "[-1].name" -o tsv)
+
+          az containerapp ingress traffic set \
+            --name "$AZURE_CONTAINER_APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --revision-weight "${NEW_REVISION}=100"
+
+          echo "Canary promoted to 100%"
