@@ -13,6 +13,8 @@
   ],
   "n_estimators": 100,
   "contamination": 0.05,
-  "trained_at": "2026-07-03T17:50:37.589957+00:00",
-  "training_samples": 533
+  "trained_at": "2026-07-05T16:00:15.763504+00:00",
+  "training_samples": 533,
+  "run_id": "d81c3340261b4f318ec0dddde6c8df28",
+  "dataset_hash": "d0d327c18d93"
 }
