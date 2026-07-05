@@ -27,10 +27,6 @@ def load_artifacts(
 
 def _load_from_registry(model_name: str, stage: str | None):
     import mlflow
-    from mlflow.tracking import MlflowClient
-
-    MlflowClient()
-
     if stage:
         model_uri = f"models:/{model_name}/{stage}"
     else:
