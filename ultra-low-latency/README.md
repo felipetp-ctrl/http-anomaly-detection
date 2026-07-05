@@ -31,6 +31,7 @@ The Python helper in `ultra-low-latency/demo_local.py` checks the ultra-low-late
 - `/demo`
 - `/demo/{scenario}`
 - optional `/predict` smoke call
+- DDoS run prints a small score chart so the anomaly progression is visible
 
 If `http://127.0.0.1:8080` is not already running the Rust server, the helper can start it automatically on a free local port and continue the test flow.
 If `/demo` is not exposed by the running service yet, the helper falls back to a local demo generator and still exercises `/predict` across the same scenarios.

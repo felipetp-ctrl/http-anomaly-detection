@@ -267,6 +267,55 @@ def print_demo_summary(scenario: str, payload: dict[str, Any]) -> None:
             f"  sample#{first_sample.get('request_number')}  "
             f"anomaly={first_sample.get('is_anomaly')}  score={first_sample.get('anomaly_score')}"
         )
+    if scenario == "ddos" and samples:
+        print_score_chart(samples, payload.get("first_anomaly_at"))
+
+
+def print_score_chart(samples: list[dict[str, Any]], first_anomaly_at: int | None) -> None:
+    scored_points = [
+        (sample.get("request_number"), float(sample["anomaly_score"]))
+        for sample in samples
+        if sample.get("request_number") is not None and sample.get("anomaly_score") is not None
+    ]
+    if len(scored_points) < 2:
+        return
+
+    request_numbers = [point[0] for point in scored_points]
+    scores = [point[1] for point in scored_points]
+    min_score = min(scores)
+    max_score = max(scores)
+    if abs(max_score - min_score) < 1e-9:
+        max_score = min_score + 1.0
+
+    height = 7
+    width = len(scored_points)
+    grid = [[" " for _ in range(width)] for _ in range(height)]
+
+    anomaly_index = None
+    if first_anomaly_at is not None:
+        anomaly_index = next((index for index, request_number in enumerate(request_numbers) if request_number >= first_anomaly_at), None)
+
+    for index, (_, score) in enumerate(scored_points):
+        normalized = (score - min_score) / (max_score - min_score)
+        row = height - 1 - int(round(normalized * (height - 1)))
+        grid[row][index] = "A" if index == anomaly_index else "●"
+
+    print("  DDoS score evolution (lower score = more anomalous)")
+    for row_index, row in enumerate(grid):
+        level = max_score - (max_score - min_score) * (row_index / (height - 1))
+        print(f"  {level:>8.4f} | {''.join(row)}")
+
+    x_labels = [str(request_numbers[0]), str(request_numbers[len(request_numbers) // 2]), str(request_numbers[-1])]
+    label_line = [" " for _ in range(width)]
+    for position, label in zip([0, width // 2, width - 1], x_labels):
+        start = max(0, min(width - len(label), position - len(label) // 2))
+        for offset, char in enumerate(label):
+            label_line[start + offset] = char
+
+    print(f"           +{'-' * width}")
+    print(f"            {''.join(label_line)}")
+    if anomaly_index is not None:
+        print(f"  A = first anomaly at request {first_anomaly_at}")
 
 
 def run_demo_remote(base_url: str, scenario: str) -> None:
