@@ -14,12 +14,21 @@ from lib.model_loader import load_artifacts
 _model = None
 _scaler = None
 _metadata = None
+_feature_logger = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _model, _scaler, _metadata
     _model, _scaler, _metadata = load_artifacts()
+
+    global _feature_logger
+    from monitoring.logger import FeatureLogger
+    import os
+    _feature_logger = FeatureLogger(
+        connection_string=os.environ.get("AZURE_STORAGE_CONNECTION_STRING"),
+        container_name=os.environ.get("FEATURE_LOG_CONTAINER", "feature-logs"),
+    )
     yield
 
 
@@ -129,6 +138,17 @@ def predict(req: PredictRequest = Body(openapi_examples=PREDICT_EXAMPLES)):
 
     feature_values = dict(zip(FEATURE_NAMES, features))
     sorted_features = dict(sorted(feature_values.items(), key=lambda x: abs(x[1]), reverse=True)[:5])
+
+    if _feature_logger:
+        try:
+            _feature_logger.log(
+                features=features,
+                prediction=int(prediction),
+                anomaly_score=round(score, 4),
+                timestamp=req.timestamp,
+            )
+        except Exception:
+            pass
 
     return PredictResponse(
         ip=req.ip,
