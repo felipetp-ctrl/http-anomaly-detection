@@ -62,7 +62,7 @@ impl ModelRunner {
         })
     }
 
-    pub fn predict(&self, features: &[f64; 10]) -> (bool, f64) {
+    pub fn diagnose(&self, features: &[f64; 10]) -> PredictionDiagnostics {
         let mut scaled = [0.0f64; 10];
         for i in 0..10 {
             scaled[i] = (features[i] - self.scaler_mean[i]) / self.scaler_scale[i];
@@ -79,7 +79,18 @@ impl ModelRunner {
         let decision = score - self.offset;
         let is_anomaly = decision < 0.0;
 
-        (is_anomaly, score)
+        PredictionDiagnostics {
+            scaled_features: scaled,
+            score_samples: score,
+            decision_function: decision,
+            is_anomaly,
+            offset: self.offset,
+        }
+    }
+
+    pub fn predict(&self, features: &[f64; 10]) -> (bool, f64) {
+        let diagnostics = self.diagnose(features);
+        (diagnostics.is_anomaly, diagnostics.score_samples)
     }
 
     fn tree_path_length(&self, tree: &Tree, x: &[f64; 10]) -> f64 {
@@ -105,6 +116,15 @@ impl ModelRunner {
             depth += 1.0;
         }
     }
+}
+
+#[derive(Clone, Copy)]
+pub struct PredictionDiagnostics {
+    pub scaled_features: [f64; 10],
+    pub score_samples: f64,
+    pub decision_function: f64,
+    pub is_anomaly: bool,
+    pub offset: f64,
 }
 
 #[cfg(test)]

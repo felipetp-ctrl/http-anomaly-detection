@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use actix_web::{web, App, HttpServer, HttpResponse};
 
-use inference::ModelRunner;
+use inference::{ModelRunner, PredictionDiagnostics};
 use schemas::{DemoResponse, DemoSample, DemoScenarioSummary, PredictRequest, PredictResponse};
 use state::{IpState, RequestRecord};
 
@@ -42,75 +42,6 @@ fn swagger_ui_html() -> String {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>HTTP Anomaly Detection API Docs</title>
     <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
-    <style>
-      :root {
-        color-scheme: dark;
-      }
-      html, body {
-        margin: 0;
-        background:
-          radial-gradient(circle at top, rgba(30, 41, 59, 0.92), rgba(2, 6, 23, 1) 50%),
-          #020617;
-        color: #e2e8f0;
-        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      }
-      #swagger-ui {
-        background: transparent;
-      }
-      .swagger-ui .topbar {
-        display: none;
-      }
-      .swagger-ui .info .title,
-      .swagger-ui .info p,
-      .swagger-ui .opblock-summary-description,
-      .swagger-ui .opblock-description-wrapper p,
-      .swagger-ui .parameter__name,
-      .swagger-ui .parameter__type,
-      .swagger-ui .response-col_status,
-      .swagger-ui .response-col_description,
-      .swagger-ui .btn,
-      .swagger-ui label,
-      .swagger-ui .tab li,
-      .swagger-ui .model-title,
-      .swagger-ui .model,
-      .swagger-ui .renderedMarkdown {
-        color: #e2e8f0;
-      }
-      .swagger-ui .info {
-        margin: 28px 0 18px;
-      }
-      .swagger-ui .scheme-container,
-      .swagger-ui .opblock,
-      .swagger-ui .models,
-      .swagger-ui .dialog-ux .modal-ux,
-      .swagger-ui .execute-wrapper {
-        background: rgba(15, 23, 42, 0.82);
-        border: 1px solid rgba(148, 163, 184, 0.16);
-        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
-        backdrop-filter: blur(14px);
-      }
-      .swagger-ui .info .title {
-        font-size: 40px;
-        letter-spacing: -0.04em;
-        font-weight: 800;
-      }
-      .swagger-ui .info .description {
-        max-width: 860px;
-      }
-      .swagger-ui .scheme-container {
-        margin: 0 0 22px;
-      }
-      .swagger-ui .btn.authorize,
-      .swagger-ui .btn.try-out__btn,
-      .swagger-ui .btn.execute,
-      .swagger-ui .btn.cancel {
-        border-radius: 999px;
-      }
-      .swagger-ui .opblock.opblock-get .opblock-summary-method,
-      .swagger-ui .opblock.opblock-post .opblock-summary-method {
-        border-radius: 999px;
-      }
-    </style>
   </head>
   <body>
     <div id="swagger-ui"></div>
@@ -376,6 +307,16 @@ struct ScenarioData {
     requests: Vec<RequestRecord>,
 }
 
+struct PredictionOutcome {
+    is_anomaly: bool,
+    anomaly_score: f64,
+    top_features: HashMap<String, f64>,
+    timing_ms: HashMap<String, f64>,
+}
+
+const CREDENTIAL_STUFFING_IP_MARKER: &str = "cred-198.51.100.77";
+const CREDENTIAL_STUFFING_DEBUG_LIMIT: usize = 10;
+
 fn scenario_meta() -> Vec<DemoScenarioSummary> {
     [
         ScenarioName::Legitimate,
@@ -489,26 +430,239 @@ fn scenario_data(name: ScenarioName) -> ScenarioData {
     }
 }
 
-fn run_prediction(ip: &str, record: &RequestRecord, model: &ModelRunner, ip_state: &IpState) -> (bool, f64, HashMap<String, f64>) {
+fn run_prediction(ip: &str, record: &RequestRecord, model: &ModelRunner, ip_state: &IpState) -> PredictionOutcome {
+    let t0 = Instant::now();
     ip_state.add_record(ip, record.clone());
+    let t_state = Instant::now();
+
     let records_30s = ip_state.get_records(ip, record.timestamp, 30.0);
     let records_5min = ip_state.get_records(ip, record.timestamp, 300.0);
     let feature_vec = features::compute_features(&records_30s, &records_5min);
-    let (is_anomaly, anomaly_score) = model.predict(&feature_vec);
+    let t_features = Instant::now();
 
-    let feature_names = [
-        "request_count_30s", "request_count_5min", "endpoint_entropy",
-        "status_code_entropy", "status_401_ratio", "interval_std",
-        "unique_ua_ratio", "known_ua_ratio", "payload_size_std", "response_time_std",
-    ];
+    let diagnostics = model.diagnose(&feature_vec);
+    let (is_anomaly, anomaly_score) = (diagnostics.is_anomaly, diagnostics.score_samples);
+    let t_predict = Instant::now();
+
     let mut indexed: Vec<(usize, f64)> = feature_vec.iter().enumerate().map(|(i, &v)| (i, v)).collect();
     indexed.sort_by(|a, b| b.1.abs().partial_cmp(&a.1.abs()).unwrap());
     let top_features = indexed.iter()
         .take(5)
-        .map(|&(i, v)| (feature_names[i].to_string(), (v * 10000.0).round() / 10000.0))
+        .map(|&(i, v)| (features::FEATURE_NAMES[i].to_string(), (v * 10000.0).round() / 10000.0))
         .collect();
 
-    (is_anomaly, (anomaly_score * 10000.0).round() / 10000.0, top_features)
+    let request_number = records_5min.len();
+    if ip.contains(CREDENTIAL_STUFFING_IP_MARKER) && request_number <= CREDENTIAL_STUFFING_DEBUG_LIMIT {
+        let previous_feature_vec = if request_number > 1 {
+            Some(features::compute_features(
+                &records_30s[..records_30s.len() - 1],
+                &records_5min[..records_5min.len() - 1],
+            ))
+        } else {
+            None
+        };
+        print_credential_stuffing_debug(
+            request_number,
+            record,
+            &records_30s,
+            &records_5min,
+            &feature_vec,
+            previous_feature_vec.as_ref(),
+            &diagnostics,
+        );
+    }
+
+    let total_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let mut timing = HashMap::new();
+    timing.insert("state_update".to_string(), round_ms(t_state.duration_since(t0)));
+    timing.insert("feature_calc".to_string(), round_ms(t_features.duration_since(t_state)));
+    timing.insert("prediction".to_string(), round_ms(t_predict.duration_since(t_features)));
+    timing.insert("total".to_string(), (total_ms * 100.0).round() / 100.0);
+
+    PredictionOutcome {
+        is_anomaly,
+        anomaly_score: (anomaly_score * 10000.0).round() / 10000.0,
+        top_features,
+        timing_ms: timing,
+    }
+}
+
+fn print_credential_stuffing_debug(
+    request_number: usize,
+    record: &RequestRecord,
+    records_30s: &[RequestRecord],
+    records_5min: &[RequestRecord],
+    feature_vec: &[f64; 10],
+    previous_feature_vec: Option<&[f64; 10]>,
+    diagnostics: &PredictionDiagnostics,
+) {
+    println!("[credential_stuffing debug] request #{}", request_number);
+    println!("  request: timestamp={:.3} endpoint={} status={} payload_size={:.1} user_agent={} response_time={:.1}",
+        record.timestamp, record.endpoint, record.status_code, record.payload_size, record.user_agent, record.response_time);
+    println!("  feature_names: {}", features::FEATURE_NAMES.join(", "));
+    println!("  raw_features: {}", format_feature_pairs(feature_vec));
+    println!("  scaled_features: {}", format_feature_pairs(&diagnostics.scaled_features));
+    println!("  score_samples={:.10} decision_function={:.10} predict()={} offset_={:.10}",
+        diagnostics.score_samples,
+        diagnostics.decision_function,
+        if diagnostics.is_anomaly { -1 } else { 1 },
+        diagnostics.offset);
+    println!("  top_5_abs_z: {}", format_top_abs_z_scores(&diagnostics.scaled_features));
+    match previous_feature_vec {
+        Some(previous) => println!("  changed_since_previous: {}", format_feature_changes(previous, feature_vec)),
+        None => println!("  changed_since_previous: n/a (first request)"),
+    }
+    println!("  window_stats: {}", format_window_stats(records_30s, records_5min));
+    if request_number == 1 {
+        println!("  first_request_driver_hypothesis: a fully cold window with status_401_ratio=1.0000, known_ua_ratio=0.0000, endpoint_entropy=0.0000, status_code_entropy=0.0000, unique_ua_ratio=1.0000, and zero interval variance is already far from the training baseline");
+    }
+}
+
+fn format_feature_pairs(values: &[f64; 10]) -> String {
+    features::FEATURE_NAMES
+        .iter()
+        .zip(values.iter())
+        .map(|(name, value)| format!("{}={:.4}", name, value))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn format_top_abs_z_scores(scaled_features: &[f64; 10]) -> String {
+    let mut indexed: Vec<(usize, f64)> = scaled_features.iter().enumerate().map(|(index, value)| (index, *value)).collect();
+    indexed.sort_by(|a, b| b.1.abs().partial_cmp(&a.1.abs()).unwrap());
+    indexed
+        .into_iter()
+        .take(5)
+        .map(|(index, value)| format!("{}={:+.4} (|z|={:.4})", features::FEATURE_NAMES[index], value, value.abs()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn format_feature_changes(previous: &[f64; 10], current: &[f64; 10]) -> String {
+    let mut changes = Vec::new();
+    for index in 0..current.len() {
+        let delta = current[index] - previous[index];
+        if delta.abs() > 1e-12 {
+            changes.push(format!(
+                "{}: {:.4} -> {:.4} ({:+.4})",
+                features::FEATURE_NAMES[index],
+                previous[index],
+                current[index],
+                delta,
+            ));
+        }
+    }
+
+    if changes.is_empty() {
+        "no feature changes".to_string()
+    } else {
+        changes.join(", ")
+    }
+}
+
+fn format_window_stats(records_30s: &[RequestRecord], records_5min: &[RequestRecord]) -> String {
+    let request_count_30s = records_30s.len();
+    let request_count_5min = records_5min.len();
+
+    let mut endpoints = Vec::new();
+    let mut status_counts: HashMap<i32, usize> = HashMap::new();
+    let mut timestamps: Vec<f64> = Vec::new();
+    let mut payload_sizes: Vec<f64> = Vec::new();
+    let mut response_times: Vec<f64> = Vec::new();
+
+    for record in records_5min {
+        endpoints.push(record.endpoint.as_str());
+        *status_counts.entry(record.status_code).or_insert(0) += 1;
+        timestamps.push(record.timestamp);
+        payload_sizes.push(record.payload_size);
+        response_times.push(record.response_time);
+    }
+
+    timestamps.sort_by(|left, right| left.partial_cmp(right).unwrap());
+    let intervals: Vec<f64> = timestamps.windows(2).map(|window| window[1] - window[0]).collect();
+    let interval_mean = if intervals.is_empty() {
+        0.0
+    } else {
+        intervals.iter().sum::<f64>() / intervals.len() as f64
+    };
+    let interval_std = std_dev(&intervals);
+    let interval_min = intervals.iter().cloned().fold(f64::INFINITY, f64::min);
+    let interval_max = intervals.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+
+    let endpoint_entropy = entropy(&endpoints);
+    let unique_endpoints = {
+        let mut values = endpoints.clone();
+        values.sort();
+        values.dedup();
+        values.len()
+    };
+
+    let status_ratio = |status_code: i32| -> f64 {
+        if request_count_5min == 0 {
+            0.0
+        } else {
+            *status_counts.get(&status_code).unwrap_or(&0) as f64 / request_count_5min as f64
+        }
+    };
+
+    let payload_std = std_dev(&payload_sizes);
+    let response_std = std_dev(&response_times);
+
+    format!(
+        "request_count_30s={} request_count_5min={} unique_endpoints={} endpoint_entropy={:.4} status_ratios={{200:{:.4}, 401:{:.4}, 403:{:.4}, 404:{:.4}, 5xx:{:.4}}} interval_stats={{count:{}, mean:{:.4}, std:{:.4}, min:{:.4}, max:{:.4}}} payload_std={:.4} response_std={:.4}",
+        request_count_30s,
+        request_count_5min,
+        unique_endpoints,
+        endpoint_entropy,
+        status_ratio(200),
+        status_ratio(401),
+        status_ratio(403),
+        status_ratio(404),
+        if request_count_5min == 0 {
+            0.0
+        } else {
+            status_counts
+                .iter()
+                .filter(|(status_code, _)| **status_code >= 500)
+                .map(|(_, count)| *count as f64)
+                .sum::<f64>()
+                / request_count_5min as f64
+        },
+        intervals.len(),
+        interval_mean,
+        interval_std,
+        if intervals.is_empty() { 0.0 } else { interval_min },
+        if intervals.is_empty() { 0.0 } else { interval_max },
+        payload_std,
+        response_std,
+    )
+}
+
+fn entropy(values: &[&str]) -> f64 {
+    let n = values.len();
+    if n == 0 {
+        return 0.0;
+    }
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for value in values {
+        *counts.entry(*value).or_insert(0) += 1;
+    }
+    let n = n as f64;
+    -counts.values().map(|count| {
+        let probability = *count as f64 / n;
+        probability * probability.log2()
+    }).sum::<f64>()
+}
+
+fn std_dev(values: &[f64]) -> f64 {
+    let n = values.len();
+    if n < 2 {
+        return 0.0;
+    }
+    let n = n as f64;
+    let mean = values.iter().sum::<f64>() / n;
+    let variance = values.iter().map(|value| (value - mean).powi(2)).sum::<f64>() / (n - 1.0);
+    variance.sqrt()
 }
 
 async fn demo_list() -> HttpResponse {
@@ -533,8 +687,8 @@ async fn demo_run(path: web::Path<String>, model: web::Data<ModelRunner>, ip_sta
     let mut first_anomaly_at: Option<usize> = None;
 
     for (index, record) in scenario_data.requests.iter().enumerate() {
-        let (is_anomaly, anomaly_score, top_features) = run_prediction(&scenario_data.ip, record, &model, &ip_state);
-        if is_anomaly {
+        let outcome = run_prediction(&scenario_data.ip, record, &model, &ip_state);
+        if outcome.is_anomaly {
             anomaly_count += 1;
             if first_anomaly_at.is_none() {
                 first_anomaly_at = Some(index + 1);
@@ -543,9 +697,9 @@ async fn demo_run(path: web::Path<String>, model: web::Data<ModelRunner>, ip_sta
         if index % sample_every == 0 || index + 1 == total {
             samples.push(DemoSample {
                 request_number: index + 1,
-                is_anomaly,
-                anomaly_score,
-                top_features,
+                is_anomaly: outcome.is_anomaly,
+                anomaly_score: outcome.anomaly_score,
+                top_features: outcome.top_features,
             });
         }
     }
@@ -566,8 +720,6 @@ async fn predict(
     ip_state: web::Data<IpState>,
     model: web::Data<ModelRunner>,
 ) -> HttpResponse {
-    let t0 = Instant::now();
-
     let record = RequestRecord {
         timestamp: req.timestamp,
         endpoint: req.endpoint.clone(),
@@ -576,43 +728,14 @@ async fn predict(
         user_agent: req.user_agent.clone(),
         response_time: req.response_time,
     };
-    ip_state.add_record(&req.ip, record);
-    let t_state = Instant::now();
-
-    let records_30s = ip_state.get_records(&req.ip, req.timestamp, 30.0);
-    let records_5min = ip_state.get_records(&req.ip, req.timestamp, 300.0);
-    let feature_vec = features::compute_features(&records_30s, &records_5min);
-    let t_features = Instant::now();
-
-    let (is_anomaly, anomaly_score) = model.predict(&feature_vec);
-    let t_predict = Instant::now();
-
-    let feature_names = [
-        "request_count_30s", "request_count_5min", "endpoint_entropy",
-        "status_code_entropy", "status_401_ratio", "interval_std",
-        "unique_ua_ratio", "known_ua_ratio", "payload_size_std", "response_time_std",
-    ];
-    let mut indexed: Vec<(usize, f64)> = feature_vec.iter().enumerate().map(|(i, &v)| (i, v)).collect();
-    indexed.sort_by(|a, b| b.1.abs().partial_cmp(&a.1.abs()).unwrap());
-    let top_features: HashMap<String, f64> = indexed.iter()
-        .take(5)
-        .map(|&(i, v)| (feature_names[i].to_string(), (v * 10000.0).round() / 10000.0))
-        .collect();
-
-    let total_ms = t0.elapsed().as_secs_f64() * 1000.0;
-
-    let mut timing = HashMap::new();
-    timing.insert("state_update".to_string(), round_ms(t_state.duration_since(t0)));
-    timing.insert("feature_calc".to_string(), round_ms(t_features.duration_since(t_state)));
-    timing.insert("prediction".to_string(), round_ms(t_predict.duration_since(t_features)));
-    timing.insert("total".to_string(), (total_ms * 100.0).round() / 100.0);
+    let outcome = run_prediction(&req.ip, &record, &model, &ip_state);
 
     let resp = PredictResponse {
         ip: req.ip.clone(),
-        is_anomaly,
-        anomaly_score: (anomaly_score * 10000.0).round() / 10000.0,
-        top_features,
-        timing_ms: timing,
+        is_anomaly: outcome.is_anomaly,
+        anomaly_score: outcome.anomaly_score,
+        top_features: outcome.top_features,
+        timing_ms: outcome.timing_ms,
     };
 
     HttpResponse::Ok().json(resp)

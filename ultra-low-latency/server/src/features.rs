@@ -1,6 +1,19 @@
 use std::collections::HashMap;
 use crate::state::RequestRecord;
 
+pub const FEATURE_NAMES: [&str; 10] = [
+    "request_count_30s",
+    "request_count_5min",
+    "endpoint_entropy",
+    "status_code_entropy",
+    "status_401_ratio",
+    "interval_std",
+    "unique_ua_ratio",
+    "known_ua_ratio",
+    "payload_size_std",
+    "response_time_std",
+];
+
 const KNOWN_UA_PATTERNS: &[&str] = &[
     "Mozilla/5.0", "Chrome/", "Safari/", "Firefox/",
     "Edg/", "OPR/", "Opera/",
