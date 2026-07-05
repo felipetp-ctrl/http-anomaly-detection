@@ -120,8 +120,75 @@ The Rust variant ships with interactive docs and a local smoke-test helper:
 
 If the running local server does not expose the full demo routes yet, the helper falls back to the local scenario generator and still exercises `/predict` end-to-end.
 
+## MLOps Pipeline
+
+### Architecture
+
+```
+Code push → GitHub Actions CI → Train (Azure ML) → Quality Gate → Canary Deploy
+                                                                      ↓
+Drift detected ← Azure Monitor ← Data Drift Monitor ← Feature Logs ← Production
+      ↓
+Retrain (automated) → Quality Gate → Canary Deploy → Production
+```
+
+### Components
+
+| Component | Tool | Purpose |
+|-----------|------|---------|
+| Experiment tracking | MLflow on Azure ML | Log params, metrics, artifacts per training run |
+| Model registry | MLflow Model Registry | Version models with stages (Staging → Production) |
+| CI | GitHub Actions | Lint, test, Docker build on every push |
+| CD | GitHub Actions + Azure Container Apps | Quality gate → canary deploy (10% → 100%) |
+| Drift monitoring | Azure ML Data Drift Monitor | Daily PSI check on production features |
+| Auto-retrain | GitHub Actions webhook | Drift → retrain → validate → deploy |
+
+### Running Locally
+
+```bash
+# Train with MLflow tracking (local)
+python -m training.train_model
+
+# Generate baseline for drift monitoring
+python -m monitoring.register_baseline --local-only
+```
+
+### Azure Setup
+
+```bash
+# 1. Provision infrastructure
+bash infra/setup_workspace.sh
+
+# 2. Register baseline dataset
+python -m monitoring.register_baseline
+
+# 3. Configure drift monitor
+python -m monitoring.setup_drift_monitor
+
+# 4. Deploy
+bash infra/deploy_container_app.sh
+```
+
+### GitHub Secrets Required
+
+| Secret | Description |
+|--------|-------------|
+| `AZURE_CLIENT_ID` | App registration client ID (OIDC) |
+| `AZURE_TENANT_ID` | Azure AD tenant ID |
+| `AZURE_SUBSCRIPTION_ID` | Azure subscription ID |
+
+### GitHub Variables Required
+
+| Variable | Description |
+|----------|-------------|
+| `AZURE_RESOURCE_GROUP` | Resource group name |
+| `AZURE_ML_WORKSPACE` | Azure ML workspace name |
+| `AZURE_CONTAINER_APP_NAME` | Container App name |
+| `AZURE_CONTAINER_REGISTRY` | ACR name |
+| `AZURE_CONTAINER_APP_URL` | Container App FQDN |
+
 ## Stack
 
-Python 3.12+ · FastAPI · scikit-learn (Isolation Forest) · joblib · pandas (training only)
+Python 3.12+ · FastAPI · scikit-learn (Isolation Forest) · MLflow · Azure ML SDK · joblib · pandas (training only)
 
 Rust 1.96+ · Actix-Web · serde (ultra-low-latency variant)
