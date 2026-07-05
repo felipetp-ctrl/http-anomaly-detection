@@ -1,0 +1,28 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandJob.schema.json
+
+experiment_name: http-anomaly-isolation-forest
+display_name: train-isolation-forest
+description: Train Isolation Forest model for HTTP anomaly detection
+
+compute: azureml:cpu-cluster
+
+environment:
+  image: mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu22.04
+  conda_file: conda_env.yml
+
+code: ../
+
+command: >-
+  python -c "
+  from training.train_model import train;
+  result = train(register=True);
+  print(f'Run: {result[\"run_id\"]}');
+  print(f'Silhouette: {result[\"silhouette_score\"]:.4f}');
+  print(f'Anomaly rate: {result[\"anomaly_rate\"]:.4f}');
+  print(f'Model version: {result[\"model_version\"]}');
+  "
+
+inputs:
+  training_data:
+    type: uri_file
+    path: azureml:http-anomaly-baseline:1
