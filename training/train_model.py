@@ -58,7 +58,10 @@ def train(
         scores = model.score_samples(X_scaled)
 
         anomaly_rate = float((predictions == -1).mean())
-        sil_score = float(silhouette_score(X_scaled, predictions))
+        if len(set(predictions)) < 2:
+            sil_score = -1.0
+        else:
+            sil_score = float(silhouette_score(X_scaled, predictions))
 
         mlflow.log_params({
             "n_estimators": N_ESTIMATORS,
@@ -89,7 +92,7 @@ def train(
         with open(artifacts_dir / "metadata.json", "w") as f:
             json.dump(metadata, f, indent=2)
 
-        mlflow.log_artifacts(str(artifacts_dir))
+        mlflow.log_artifacts(str(artifacts_dir), artifact_path="artifacts")
 
         model_version = None
         if register:
